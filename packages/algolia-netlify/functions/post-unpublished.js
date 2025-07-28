@@ -35,11 +35,11 @@ exports.handler = async (event) => {
 
     const algoliaSettings = {
         appId: process.env.ALGOLIA_APP_ID,
-        apiKey: process.env.ALGOLIA_API_KEY,
-        index: process.env.ALGOLIA_INDEX
+        apiKey: process.env.ALGOLIA_ADMIN_API_KEY,
+        index: process.env.ALGOLIA_INDEX_NAME
     };
 
-    const {post} = JSON.parse(event.body);
+    let {post} = JSON.parse(event.body);
 
     // Updated posts are in `post.current`, deleted are in `post.previous`
     const {slug} = (post.current && Object.keys(post.current).length && post.current)

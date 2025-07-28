@@ -36,8 +36,8 @@ exports.handler = async (event) => {
 
     const algoliaSettings = {
         appId: process.env.ALGOLIA_APP_ID,
-        apiKey: process.env.ALGOLIA_API_KEY,
-        index: process.env.ALGOLIA_INDEX
+        apiKey: process.env.ALGOLIA_ADMIN_API_KEY,
+        index: process.env.ALGOLIA_INDEX_NAME
     };
 
     let {post} = JSON.parse(event.body);

