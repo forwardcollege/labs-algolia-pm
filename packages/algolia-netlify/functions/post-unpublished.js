@@ -33,26 +33,36 @@ exports.handler = async (event) => {
         };
     }
 
+    console.log('Starting Algolia deletion for post-unpublished...');
+
     const algoliaSettings = {
         appId: process.env.ALGOLIA_APP_ID,
         apiKey: process.env.ALGOLIA_ADMIN_API_KEY,
         index: process.env.ALGOLIA_INDEX_NAME
     };
 
-    let {post} = JSON.parse(event.body);
-
-    // Updated posts are in `post.current`, deleted are in `post.previous`
-    const {slug} = (post.current && Object.keys(post.current).length && post.current)
-                   || (post.previous && Object.keys(post.previous).length && post.previous);
-
-    if (!slug) {
-        return {
-            statusCode: 200,
-            body: `No valid request body detected`
-        };
-    }
+    // Log settings without the API key for security
+    const {apiKey, ...safeSettings} = algoliaSettings;
+    console.log('Using Algolia settings:', safeSettings);
 
     try {
+        console.log('Received body from Ghost:', event.body);
+        let {post} = JSON.parse(event.body);
+
+        // Updated posts are in `post.current`, deleted are in `post.previous`
+        const {slug} = (post.current && Object.keys(post.current).length && post.current)
+                       || (post.previous && Object.keys(post.previous).length && post.previous);
+
+        if (!slug) {
+            console.log('No slug found in request body. Exiting.');
+            return {
+                statusCode: 200,
+                body: `No valid request body detected`
+            };
+        }
+
+        console.log(`Processing deletion for slug: "${slug}"`);
+
         // Instanciate the Algolia indexer, which connects to Algolia and
         // sets up the settings for the index.
         const index = new IndexFactory(algoliaSettings);
@@ -64,10 +74,11 @@ exports.handler = async (event) => {
             body: `Post "${slug}" has been removed from the index.`
         };
     } catch (error) {
-        console.log(error); // eslint-disable-line no-console
+        console.error('ALGOLIA_ERROR: An error occurred during deletion.');
+        console.error(error);
         return {
             statusCode: 500,
-            body: JSON.stringify({msg: error.message})
+            body: JSON.stringify({msg: 'An error occurred during deletion.', error: error.message})
         };
     }
 };
