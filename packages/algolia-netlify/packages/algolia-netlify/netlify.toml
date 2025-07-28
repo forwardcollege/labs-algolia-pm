@@ -1,0 +1,7 @@
+[dev]
+  functions = "functions"
+
+[template.environment]
+  ALGOLIA_APP_ID = "Algolia Application ID"
+  ALGOLIA_API_KEY = "An Algolia Admin API Key or a generated one"
+  ALGOLIA_INDEX = "Name of the Algolia index" 
