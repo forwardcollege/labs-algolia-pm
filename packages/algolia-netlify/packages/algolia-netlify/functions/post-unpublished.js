@@ -1,1 +1,66 @@
- 
+const IndexFactory = require('@tryghost/algolia-indexer');
+
+exports.handler = async (event) => {
+    // We only support POST
+    if (event.httpMethod !== 'POST') {
+        return {
+            statusCode: 405,
+            body: 'Method Not Allowed'
+        };
+    }
+
+    const {key} = event.queryStringParameters;
+
+    // TODO: Deprecate this in the future and make the key mandatory
+    if (key && key !== process.env.NETLIFY_KEY) {
+        return {
+            statusCode: 401,
+            body: `Unauthorized`
+        };
+    }
+
+    if (!event.headers['user-agent'].includes('https://github.com/TryGhost/Ghost')) {
+        return {
+            statusCode: 401,
+            body: `Unauthorized`
+        };
+    }
+
+    const algoliaSettings = {
+        appId: process.env.ALGOLIA_APP_ID,
+        apiKey: process.env.ALGOLIA_API_KEY,
+        index: process.env.ALGOLIA_INDEX
+    };
+
+    const {post} = JSON.parse(event.body);
+
+    // Updated posts are in `post.current`, deleted are in `post.previous`
+    const {slug} = (post.current && Object.keys(post.current).length && post.current)
+                   || (post.previous && Object.keys(post.previous).length && post.previous);
+
+    if (!slug) {
+        return {
+            statusCode: 200,
+            body: `No valid request body detected`
+        };
+    }
+
+    try {
+        // Instanciate the Algolia indexer, which connects to Algolia and
+        // sets up the settings for the index.
+        const index = new IndexFactory(algoliaSettings);
+        await index.initIndex();
+        await index.delete(slug);
+        console.log(`Fragments for slug "${slug}" successfully removed from Algolia index`); // eslint-disable-line no-console
+        return {
+            statusCode: 200,
+            body: `Post "${slug}" has been removed from the index.`
+        };
+    } catch (error) {
+        console.log(error); // eslint-disable-line no-console
+        return {
+            statusCode: 500,
+            body: JSON.stringify({msg: error.message})
+        };
+    }
+}; 
