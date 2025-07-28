@@ -2,6 +2,14 @@ const IndexFactory = require('@tryghost/algolia-indexer');
 const transforms = require('@tryghost/algolia-fragmenter');
 
 exports.handler = async (event) => {
+    // We only support POST
+    if (event.httpMethod !== 'POST') {
+        return {
+            statusCode: 405,
+            body: 'Method Not Allowed'
+        };
+    }
+
     const {key} = event.queryStringParameters;
 
     // TODO: Deprecate this in the future and make the key mandatory
