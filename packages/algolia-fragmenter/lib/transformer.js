@@ -40,6 +40,10 @@ module.exports.fragmentTransformer = (recordAccumulator, node) => {
         // Use the utility function to merge fragments so that there is one-per-heading
         .reduce(reduceFragmentsUnderHeadings, []);
 
+    // The full HTML is no longer required, and we'll be merging the node
+    // object into each fragment, so we can delete it now
+    delete node.html;
+
     // convert our fragments for this node into valid objects, and merge int the
     const records = htmlFragments.reduce((fragmentAccumulator, fragment, index) => {
         // Don't need a reference to the html node type
