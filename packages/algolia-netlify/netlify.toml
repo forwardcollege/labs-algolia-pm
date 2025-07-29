@@ -27,7 +27,7 @@
   # with the functions.
   # This is to ensure that we are not bundling any node modules with the
   # functions.
-  external_node_modules = ["algoliasearch", "dotenv"]
+  external_node_modules = ["@tryghost/algolia-indexer", "@tryghost/algolia-fragmenter"]
 
 [dev]
   # We set the functions directory to "functions", which is where our
