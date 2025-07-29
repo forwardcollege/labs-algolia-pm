@@ -10,9 +10,9 @@ exports.handler = async (event) => {
         };
     }
 
-    const {key} = event.queryStringParameters;
+    const { key } = event.queryStringParameters;
 
-    // TODO: Deprecate this in the future and make the key mandatory
+    // Optional key check
     if (key && key !== process.env.NETLIFY_KEY) {
         return {
             statusCode: 401,
@@ -27,12 +27,6 @@ exports.handler = async (event) => {
         };
     }
 
-//    if (!event.headers['user-agent'].includes('https://github.com/TryGhost/Ghost')) {
-//        return {
-//            statusCode: 401,
-//            body: `Unauthorized`
-//        };
-//    }
     console.log('User-Agent:', event.headers['user-agent']);
     console.log('Starting Algolia indexing for post-published...');
 
@@ -42,13 +36,12 @@ exports.handler = async (event) => {
         index: process.env.ALGOLIA_INDEX_NAME
     };
 
-    // Log settings without the API key for security
-    const {apiKey, ...safeSettings} = algoliaSettings;
+    const { apiKey, ...safeSettings } = algoliaSettings;
     console.log('Using Algolia settings:', safeSettings);
 
     try {
         console.log('Received body from Ghost:', event.body);
-        let {post} = JSON.parse(event.body);
+        let { post } = JSON.parse(event.body);
         post = (post && post.current && Object.keys(post.current).length > 0 && post.current) || {};
 
         if (!post || Object.keys(post).length < 1) {
@@ -59,15 +52,18 @@ exports.handler = async (event) => {
             };
         }
 
+        // ✅ Use plaintext directly if html is not provided
+        if (!post.html && post.plaintext) {
+            post.html = post.plaintext;
+            console.log('Using plaintext directly for indexing.');
+        }
+
         console.log(`Processing post: "${post.title}" (slug: ${post.slug})`);
 
         const node = [post];
-
-        // Transform into Algolia object with the properties we need
         const algoliaObject = transforms.transformToAlgoliaObject(node);
         console.log('Transformed to Algolia object.');
 
-        // Create fragments of the post
         const fragments = algoliaObject.reduce(transforms.fragmentTransformer, []);
         console.log(`Created ${fragments.length} fragments to be indexed.`);
 
@@ -79,12 +75,11 @@ exports.handler = async (event) => {
             };
         }
 
-        // Instanciate the Algolia indexer, which connects to Algolia and
-        // sets up the settings for the index.
         const index = new IndexFactory(algoliaSettings);
         await index.setSettingsForIndex();
         await index.save(fragments);
-        console.log('Fragments successfully saved to Algolia index'); // eslint-disable-line no-console
+
+        console.log('Fragments successfully saved to Algolia index');
         return {
             statusCode: 200,
             body: `Post "${post.title}" has been added to the index.`
@@ -94,7 +89,7 @@ exports.handler = async (event) => {
         console.error(error);
         return {
             statusCode: 500,
-            body: JSON.stringify({msg: 'An error occurred during indexing.', error: error.message})
+            body: JSON.stringify({ msg: 'An error occurred during indexing.', error: error.message })
         };
     }
 };

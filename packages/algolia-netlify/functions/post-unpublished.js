@@ -1,7 +1,7 @@
 const IndexFactory = require('@tryghost/algolia-indexer');
 
 exports.handler = async (event) => {
-    // We only support POST
+    // Only allow POST
     if (event.httpMethod !== 'POST') {
         return {
             statusCode: 405,
@@ -9,31 +9,25 @@ exports.handler = async (event) => {
         };
     }
 
-    const {key} = event.queryStringParameters;
+    const { key } = event.queryStringParameters;
 
-    // TODO: Deprecate this in the future and make the key mandatory
+    // Optional API key check
     if (key && key !== process.env.NETLIFY_KEY) {
         return {
             statusCode: 401,
-            body: `Unauthorized`
+            body: 'Unauthorized'
         };
     }
 
+    // Skip if Algolia integration isn't enabled
     if (process.env.ALGOLIA_ACTIVE !== 'TRUE') {
         return {
             statusCode: 200,
-            body: `Algolia is not activated`
+            body: 'Algolia is not activated'
         };
     }
 
-//    if (!event.headers['user-agent'].includes('https://github.com/TryGhost/Ghost')) {
-//        return {
-//            statusCode: 401,
-//            body: `Unauthorized`
-//        };
-//    }
-
-    console.log('User-Agent:', event.headers['user-agent']);    
+    console.log('User-Agent:', event.headers['user-agent']);
     console.log('Starting Algolia deletion for post-unpublished...');
 
     const algoliaSettings = {
@@ -42,34 +36,36 @@ exports.handler = async (event) => {
         index: process.env.ALGOLIA_INDEX_NAME
     };
 
-    // Log settings without the API key for security
-    const {apiKey, ...safeSettings} = algoliaSettings;
+    const { apiKey, ...safeSettings } = algoliaSettings;
     console.log('Using Algolia settings:', safeSettings);
 
     try {
         console.log('Received body from Ghost:', event.body);
-        let {post} = JSON.parse(event.body);
+        const { post } = JSON.parse(event.body);
 
-        // Updated posts are in `post.current`, deleted are in `post.previous`
-        const {slug} = (post.current && Object.keys(post.current).length && post.current)
-                       || (post.previous && Object.keys(post.previous).length && post.previous);
+        // Look for post data in current or previous (deleted) versions
+        const postData =
+            (post.current && Object.keys(post.current).length && post.current) ||
+            (post.previous && Object.keys(post.previous).length && post.previous) ||
+            null;
 
-        if (!slug) {
-            console.log('No slug found in request body. Exiting.');
+        if (!postData || !postData.slug) {
+            console.log('No valid slug found in post data. Exiting.');
             return {
                 statusCode: 200,
-                body: `No valid request body detected`
+                body: 'No valid request body detected'
             };
         }
 
-        console.log(`Processing deletion for slug: "${slug}"`);
+        const { slug, title } = postData;
 
-        // Instanciate the Algolia indexer, which connects to Algolia and
-        // sets up the settings for the index.
+        console.log(`Processing deletion for slug: "${slug}" (title: "${title}")`);
+
         const index = new IndexFactory(algoliaSettings);
         await index.initIndex();
         await index.delete(slug);
-        console.log(`Fragments for slug "${slug}" successfully removed from Algolia index`); // eslint-disable-line no-console
+
+        console.log(`Fragments for slug "${slug}" successfully removed from Algolia index`);
         return {
             statusCode: 200,
             body: `Post "${slug}" has been removed from the index.`
@@ -79,7 +75,10 @@ exports.handler = async (event) => {
         console.error(error);
         return {
             statusCode: 500,
-            body: JSON.stringify({msg: 'An error occurred during deletion.', error: error.message})
+            body: JSON.stringify({
+                msg: 'An error occurred during deletion.',
+                error: error.message
+            })
         };
     }
 };
