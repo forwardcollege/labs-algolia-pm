@@ -54,7 +54,7 @@ exports.handler = async (event) => {
 
         // ✅ Use plaintext directly if html is not provided
         if (!post.html && post.plaintext) {
-            post.html = post.plaintext;
+            post.html = `<p>${post.plaintext}</p>`;
             console.log('Using plaintext directly for indexing.');
         }
 
