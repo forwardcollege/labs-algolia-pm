@@ -47,6 +47,11 @@ module.exports.fragmentTransformer = (recordAccumulator, node) => {
         // For now at least, we're not going to index the content string
         // The HTML string is already very long, and there are size limits
         delete fragment.content;
+
+        // We want to rename html to content
+        fragment.content = fragment.html;
+        delete fragment.html;
+
         // If we have an anchor, change the URL to be a deep link
         if (fragment.anchor) {
             fragment.url = `${node.url}#${fragment.anchor}`;
@@ -82,11 +87,15 @@ module.exports.transformToAlgoliaObject = (posts, ignoreSlugs) => {
         // Define the properties we need for Algolia
         const algoliaPost = {
             objectID: post.id,
+            postId: post.id,
             slug: post.slug,
             url: post.url,
             html: post.html,
             image: post.feature_image,
             title: post.title,
+            excerpt: post.custom_excerpt || post.excerpt,
+            published_at: post.published_at,
+            visibility: post.visibility,
             tags: [],
             authors: []
         };
@@ -101,13 +110,13 @@ module.exports.transformToAlgoliaObject = (posts, ignoreSlugs) => {
 
         if (post.tags && post.tags.length) {
             post.tags.forEach((tag) => {
-                algoliaPost.tags.push({name: tag.name, slug: tag.slug});
+                algoliaPost.tags.push(tag.name);
             });
         }
 
         if (post.authors && post.authors.length) {
             post.authors.forEach((author) => {
-                algoliaPost.authors.push({name: author.name, slug: author.slug});
+                algoliaPost.authors.push(author.name);
             });
         }
 
