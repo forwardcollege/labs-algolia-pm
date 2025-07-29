@@ -52,10 +52,20 @@ exports.handler = async (event) => {
             };
         }
 
-        // ✅ Use plaintext directly if html is not provided
-        if (!post.html && post.plaintext) {
-            post.html = `<p>${post.plaintext}</p>`;
-            console.log('Using plaintext directly for indexing.');
+        const hasTextInHtml = post.html && post.html.replace(/<[^>]*>/g, '').trim().length > 0;
+
+        // Use excerpt or plaintext if html is not provided or has no text
+        if (!hasTextInHtml) {
+            if (post.custom_excerpt) {
+                post.html = `<p>${post.custom_excerpt}</p>`;
+                console.log('Using custom_excerpt for indexing as html has no text.');
+            } else if (post.plaintext) {
+                post.html = `<p>${post.plaintext}</p>`;
+                console.log('Using plaintext for indexing as html has no text.');
+            } else if (post.title) {
+                post.html = `<p>${post.title}</p>`;
+                console.log('Using title for indexing as html, custom_excerpt, and plaintext are empty.');
+            }
         }
 
         console.log(`Processing post: "${post.title}" (slug: ${post.slug})`);
