@@ -22,7 +22,7 @@
   # for JavaScript.
   # This is to ensure that we are using a modern and fast bundler for
   # JavaScript.
-  node_bundler = "zisi"
+  node_bundler = "esbuild"
   # We externalize all node modules, which means that they will not be bundled
   # with the functions.
   # This is to ensure that we are not bundling any node modules with the

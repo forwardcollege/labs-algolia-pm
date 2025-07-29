@@ -26,13 +26,14 @@ exports.handler = async (event) => {
         };
     }
 
-    if (!event.headers['user-agent'].includes('https://github.com/TryGhost/Ghost')) {
-        return {
-            statusCode: 401,
-            body: `Unauthorized`
-        };
-    }
+//    if (!event.headers['user-agent'].includes('https://github.com/TryGhost/Ghost')) {
+//        return {
+//            statusCode: 401,
+//            body: `Unauthorized`
+//        };
+//    }
 
+    console.log('User-Agent:', event.headers['user-agent']);    
     console.log('Starting Algolia deletion for post-unpublished...');
 
     const algoliaSettings = {
