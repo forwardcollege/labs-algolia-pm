@@ -98,10 +98,11 @@ exports.handler = async (event) => {
         } else {
             // html exists; still prefer trimmed plaintext if available
             if (post.plaintext) {
-                post.plaintext = clampByBytes(post.plaintext, MAX_RECORD_BYTES);
-                delete post.html; // force fragmenter to rely on plaintext
-                console.log('HTML detected but removed — indexing plaintext only.');
-            }
+    const safeText = clampByBytes(post.plaintext, MAX_RECORD_BYTES);
+    post.plaintext = safeText;
+    post.html = `<p>${safeText}</p>`; // small, safe HTML wrapper for fragmenter
+    console.log('HTML replaced with safe, truncated plaintext wrapper.');
+}
         }
 
         // Convert Ghost post → Algolia fragments
