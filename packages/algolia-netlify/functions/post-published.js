@@ -1,9 +1,9 @@
 const IndexFactory = require('@tryghost/algolia-indexer');
-const transforms = require('@tryghost/algolia-fragmenter');
+const transforms = require('@tryghost/algolia-fragmenter'); // still imported for consistency
 
-// --- byte-safe clamp helpers (Node/Lambda friendly) ---
-const MAX_RECORD_BYTES = 8000; // stay well under Algolia's 10k hard limit
-const JSON_SOFT_LIMIT = 9500;  // soft ceiling for full record
+// --- byte-safe helpers ---
+const MAX_RECORD_BYTES = 8000; // each chunk under 10k
+const JSON_SOFT_LIMIT = 9500;  // safety margin for full record
 
 function byteLen(str) {
     if (!str) return 0;
@@ -14,7 +14,6 @@ function clampByBytes(str, limit = MAX_RECORD_BYTES) {
     if (!str) return str;
     str = String(str);
     if (byteLen(str) <= limit) return str;
-
     let lo = 0, hi = str.length, ans = '';
     while (lo <= hi) {
         const mid = Math.floor((lo + hi) / 2);
@@ -27,6 +26,30 @@ function clampByBytes(str, limit = MAX_RECORD_BYTES) {
         }
     }
     return ans;
+}
+
+// --- new helper: chunk by bytes for long posts ---
+function chunkByBytes(str, bytesLimit = MAX_RECORD_BYTES) {
+    const out = [];
+    let start = 0;
+    str = String(str || '');
+    while (start < str.length) {
+        let lo = start, hi = str.length, best = start;
+        while (lo <= hi) {
+            const mid = Math.min(start + Math.floor((lo + hi) / 2), str.length);
+            const slice = str.slice(start, mid);
+            if (byteLen(slice) <= bytesLimit) {
+                best = mid;
+                lo = mid + 1;
+            } else {
+                hi = mid - 1;
+            }
+        }
+        if (best === start) break; // prevent infinite loop
+        out.push(str.slice(start, best));
+        start = best;
+    }
+    return out;
 }
 
 exports.handler = async (event) => {
@@ -55,7 +78,6 @@ exports.handler = async (event) => {
         };
     }
 
-    console.log('User-Agent:', event.headers['user-agent']);
     console.log('Starting Algolia indexing for post-published...');
 
     const algoliaSettings = {
@@ -64,11 +86,7 @@ exports.handler = async (event) => {
         index: process.env.ALGOLIA_INDEX_NAME
     };
 
-    const { apiKey, ...safeSettings } = algoliaSettings;
-    console.log('Using Algolia settings:', safeSettings);
-
     try {
-        console.log('Received body from Ghost:', event.body);
         let { post } = JSON.parse(event.body);
         post = (post && post.current && Object.keys(post.current).length > 0 && post.current) || {};
 
@@ -82,66 +100,67 @@ exports.handler = async (event) => {
 
         console.log(`Processing post: "${post.title}" (slug: ${post.slug})`);
 
-        const hasTextInHtml = post.html && post.html.replace(/<[^>]*>/g, '').trim().length > 0;
-
-        // Prefer plaintext; avoid inflating size by wrapping into HTML
-        if (!hasTextInHtml) {
-            if (post.custom_excerpt) {
-                post.plaintext = clampByBytes(post.custom_excerpt, MAX_RECORD_BYTES);
-            } else if (post.plaintext) {
-                post.plaintext = clampByBytes(post.plaintext, MAX_RECORD_BYTES);
-            } else if (post.title) {
-                post.plaintext = clampByBytes(post.title, MAX_RECORD_BYTES);
-            }
-            delete post.html;
-            console.log('Using plaintext-based content for indexing.');
-        } else {
-            // html exists; still prefer trimmed plaintext if available
-            if (post.plaintext) {
-    const safeText = clampByBytes(post.plaintext, MAX_RECORD_BYTES);
-    post.plaintext = safeText;
-    post.html = `<p>${safeText}</p>`; // small, safe HTML wrapper for fragmenter
-    console.log('HTML replaced with safe, truncated plaintext wrapper.');
-}
-        }
-
-        // Convert Ghost post → Algolia fragments
-        const node = [post];
-        const algoliaObject = transforms.transformToAlgoliaObject(node);
-        console.log('Transformed to Algolia object.');
-
-        const fragments = algoliaObject.reduce(transforms.fragmentTransformer, []);
-        console.log(`Created ${fragments.length} fragments to be indexed.`);
-
-        if (fragments.length === 0) {
-            console.log('No fragments were created, nothing to index. Exiting.');
+        // prefer plaintext
+        let content = post.plaintext || post.custom_excerpt || post.html || post.title || '';
+        if (!content || content.trim().length === 0) {
+            console.log('No content to index for this post.');
             return {
                 statusCode: 200,
-                body: `Post "${post.title}" did not generate any fragments for indexing.`
+                body: `Post "${post.title}" has no content to index.`
             };
         }
 
-        // Final safeguard: clamp any oversized fragment fields
-        const safeFragments = fragments.map((frag) => {
-            if (frag.plaintext) frag.plaintext = clampByBytes(frag.plaintext, MAX_RECORD_BYTES);
-            if (frag.html) delete frag.html; // never send html to Algolia
+        // Clamp extremely long content to a sane total length before chunking
+        const safeText = clampByBytes(content, 600000); // allow ~600k bytes total before chunking
+        const chunks = chunkByBytes(safeText, MAX_RECORD_BYTES);
 
-            let bytes = byteLen(JSON.stringify(frag));
-            if (bytes > JSON_SOFT_LIMIT && frag.excerpt) {
-                frag.excerpt = clampByBytes(frag.excerpt, 600);
+        console.log(`Generated ${chunks.length} chunks for indexing.`);
+
+        if (chunks.length === 0) {
+            return {
+                statusCode: 200,
+                body: `Post "${post.title}" had no valid chunks to index.`
+            };
+        }
+
+        const base = {
+            postId: post.id,
+            title: post.title,
+            slug: post.slug,
+            url: post.url,
+            published_at: post.published_at,
+            primary_tag: post.primary_tag || null,
+            tags: post.tags || [],
+            authors: post.authors || [],
+            feature_image: post.feature_image || null
+        };
+
+        const records = chunks.map((text, i) => ({
+            ...base,
+            objectID: `${post.id}_${i}`,
+            chunkIndex: i,
+            plaintext: text
+        }));
+
+        // Double-check record sizes
+        for (const rec of records) {
+            const size = byteLen(JSON.stringify(rec));
+            if (size > JSON_SOFT_LIMIT) {
+                console.warn(
+                    `⚠️ Record ${rec.objectID} is ${size} bytes — trimming excerpt.`
+                );
+                rec.plaintext = clampByBytes(rec.plaintext, MAX_RECORD_BYTES);
             }
-
-            return frag;
-        });
+        }
 
         const index = new IndexFactory(algoliaSettings);
         await index.setSettingsForIndex();
-        await index.save(safeFragments);
+        await index.save(records);
 
-        console.log('Fragments successfully saved to Algolia index.');
+        console.log(`Saved ${records.length} records for "${post.title}".`);
         return {
             statusCode: 200,
-            body: `Post "${post.title}" has been added to the index.`
+            body: `Post "${post.title}" has been indexed into ${records.length} chunks.`
         };
     } catch (error) {
         console.error('ALGOLIA_ERROR: An error occurred during indexing.');
