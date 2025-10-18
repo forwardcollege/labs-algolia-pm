@@ -1,97 +1,204 @@
 const IndexFactory = require('@tryghost/algolia-indexer');
 
-// ---- helpers --------------------------------------------------
-const MAX_CHUNK_BYTES = 6000;   // text per record (~6 KB)
-const JSON_SOFT_LIMIT  = 9500;  // keep full JSON < 10 KB
+// -------- helpers ------------------------------------------------
+const MAX_CHUNK_BYTES = 5500;  // smaller chunks to keep JSON < 10KB incl. metadata
+const JSON_SOFT_LIMIT  = 9500;
 
-function bLen(str){return Buffer.byteLength(String(str||''),'utf8');}
-function clampByBytes(str,limit){
-  if(!str)return str; str=String(str);
-  if(bLen(str)<=limit)return str;
-  let lo=0,hi=str.length,ans='';
-  while(lo<=hi){
-    const mid=Math.floor((lo+hi)/2),slice=str.slice(0,mid);
-    if(bLen(slice)<=limit){ans=slice;lo=mid+1;}else hi=mid-1;
+const bLen = (s) => Buffer.byteLength(String(s || ''), 'utf8');
+
+function clampByBytes(str, limit) {
+  if (!str) return str;
+  str = String(str);
+  if (bLen(str) <= limit) return str;
+  let lo = 0, hi = str.length, ans = '';
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    const slice = str.slice(0, mid);
+    if (bLen(slice) <= limit) { ans = slice; lo = mid + 1; } else { hi = mid - 1; }
   }
   return ans;
 }
-function chunkByBytes(str,bytesLimit=MAX_CHUNK_BYTES){
-  const out=[]; let start=0; str=String(str||'');
-  while(start<str.length){
-    let lo=start,hi=str.length,best=start;
-    while(lo<=hi){
-      const mid=Math.min(start+Math.floor((lo+hi)/2),str.length);
-      const slice=str.slice(start,mid);
-      if(bLen(slice)<=bytesLimit){best=mid;lo=mid+1;}else hi=mid-1;
+
+function chunkByBytes(str, limit = MAX_CHUNK_BYTES) {
+  const out = [];
+  let start = 0;
+  str = String(str || '');
+  while (start < str.length) {
+    let lo = start, hi = str.length, best = start;
+    while (lo <= hi) {
+      const mid = Math.min(start + Math.floor((lo + hi) / 2), str.length);
+      const slice = str.slice(start, mid);
+      if (bLen(slice) <= limit) { best = mid; lo = mid + 1; } else { hi = mid - 1; }
     }
-    if(best===start)break;
-    out.push(str.slice(start,best)); start=best;
+    if (best === start) break;
+    out.push(str.slice(start, best));
+    start = best;
   }
   return out;
 }
-// ---------------------------------------------------------------
 
-exports.handler = async (event)=>{
-  if(event.httpMethod!=='POST')return{statusCode:405,body:'Method Not Allowed'};
-  const {key}=event.queryStringParameters||{};
-  if(key&&key!==process.env.NETLIFY_KEY)return{statusCode:401,body:'Unauthorized'};
-  if(process.env.ALGOLIA_ACTIVE!=='TRUE')return{statusCode:200,body:'Algolia inactive'};
+function stripHtml(html = '') {
+  return String(html)
+    .replace(/<script[\s\S]*?>[\s\S]*?<\/script>/gi, '')
+    .replace(/<style[\s\S]*?>[\s\S]*?<\/style>/gi, '')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
 
-  console.log('🚀 Starting Algolia indexing (manual chunk mode)…');
+function flattenAuthors(authors) {
+  if (!Array.isArray(authors)) return [];
+  return authors.map(a => (a && (a.name || a.slug || a.id)) || '').filter(Boolean).slice(0, 5);
+}
 
-  const algoliaSettings={
-    appId:process.env.ALGOLIA_APP_ID,
-    apiKey:process.env.ALGOLIA_ADMIN_API_KEY,
-    index:process.env.ALGOLIA_INDEX_NAME
+function flattenTags(tags) {
+  if (!Array.isArray(tags)) return [];
+  return tags.map(t => (t && (t.name || t.slug || t.id)) || '').filter(Boolean).slice(0, 10);
+}
+// ----------------------------------------------------------------
+
+exports.handler = async (event) => {
+  if (event.httpMethod !== 'POST') {
+    return { statusCode: 405, body: 'Method Not Allowed' };
+  }
+  const { key } = event.queryStringParameters || {};
+  if (key && key !== process.env.NETLIFY_KEY) {
+    return { statusCode: 401, body: 'Unauthorized' };
+  }
+  if (process.env.ALGOLIA_ACTIVE !== 'TRUE') {
+    return { statusCode: 200, body: 'Algolia inactive' };
+  }
+
+  console.log('🚀 post-published: start');
+  console.log('Headers UA:', event.headers && event.headers['user-agent']);
+  console.log('Body length:', event.body ? bLen(event.body) : 0, 'isBase64:', !!event.isBase64Encoded);
+
+  // --- decode body safely (handle base64) -----------------------
+  let raw = event.body || '{}';
+  if (event.isBase64Encoded) {
+    try {
+      raw = Buffer.from(event.body, 'base64').toString('utf8');
+      console.log('Decoded base64 body. New length:', bLen(raw));
+    } catch (e) {
+      console.warn('Failed to decode base64 body:', e.message);
+    }
+  }
+
+  // --- parse JSON with diagnostics --------------------------------
+  let payload = {};
+  try {
+    payload = JSON.parse(raw);
+  } catch (e) {
+    console.error('JSON parse error:', e.message);
+    return { statusCode: 200, body: 'Invalid JSON body' };
+  }
+
+  // Ghost can send various shapes; normalize them:
+  // - { post: { current: {...} } }
+  // - { post: {...} }
+  // - { posts: [ {...} ] }
+  // - or raw post object itself
+  let post =
+    (payload.post && payload.post.current) ||
+    payload.post ||
+    (Array.isArray(payload.posts) && payload.posts[0]) ||
+    (payload.current) ||
+    payload;
+
+  if (!post || typeof post !== 'object' || !Object.keys(post).length) {
+    console.log('No valid post object resolved from payload keys:', Object.keys(payload || {}));
+    return { statusCode: 200, body: 'No valid post found' };
+  }
+
+  console.log('Post keys:', Object.keys(post));
+  console.log('Post id:', post.id, 'slug:', post.slug, 'title:', post.title);
+
+  // --- build text ---------------------------------------------------
+  // Prefer plaintext; if missing, derive from HTML; else fall back to excerpt/title
+  let text = '';
+  if (post.plaintext && String(post.plaintext).trim().length) {
+    text = String(post.plaintext);
+    console.log('Using post.plaintext');
+  } else if (post.html && String(post.html).trim().length) {
+    text = stripHtml(post.html);
+    console.log('Using stripped post.html');
+  } else if (post.custom_excerpt) {
+    text = String(post.custom_excerpt);
+    console.log('Using post.custom_excerpt');
+  } else if (post.title) {
+    text = String(post.title);
+    console.log('Using post.title only');
+  }
+
+  if (!text.trim().length) {
+    console.log('No content to index after normalization.');
+    return { statusCode: 200, body: 'No content to index' };
+  }
+
+  // Cap huge content to keep processing bounded
+  const SAFE_CAP = 800000; // ~800KB upper bound before chunking
+  if (bLen(text) > SAFE_CAP) {
+    text = clampByBytes(text, SAFE_CAP);
+    console.log('Clamped extremely long text to', bLen(text), 'bytes');
+  }
+
+  const chunks = chunkByBytes(text, MAX_CHUNK_BYTES);
+  console.log('Chunks generated:', chunks.length, 'first chunk bytes:', bLen(chunks[0] || ''));
+
+  if (!chunks.length) {
+    return { statusCode: 200, body: 'No chunks to index' };
+  }
+
+  // --- construct records --------------------------------------------
+  const base = {
+    postId: post.id || (post.uuid || ''),
+    title: post.title || '',
+    slug: post.slug || '',
+    url: post.url || '',
+    published_at: post.published_at || null,
+    primary_tag: (post.primary_tag && (post.primary_tag.name || post.primary_tag.slug || post.primary_tag.id)) || null,
+    tags: flattenTags(post.tags),
+    authors: flattenAuthors(post.authors)
+    // exclude feature_image to save bytes
   };
 
-  try{
-    let {post}=JSON.parse(event.body||'{}');
-    post=(post&&post.current&&Object.keys(post.current).length>0&&post.current)||{};
-    if(!post.id)return{statusCode:200,body:'No valid post data'};
-
-    const text=String(post.plaintext||post.html||post.custom_excerpt||post.title||'').trim();
-    if(!text)return{statusCode:200,body:`No content to index for ${post.title}`};
-
-    // --- split full plaintext into safe chunks -----------------
-    const safeSource=clampByBytes(text,600000); // hard upper bound
-    const chunks=chunkByBytes(safeSource,MAX_CHUNK_BYTES);
-    console.log(`Generated ${chunks.length} chunks (${bLen(text)} bytes total).`);
-
-    if(!chunks.length)return{statusCode:200,body:`No chunks for ${post.title}`};
-
-    // --- build records -----------------------------------------
-    const base={
-      postId:post.id,
-      title:post.title||'',
-      slug:post.slug||'',
-      url:post.url||'',
-      published_at:post.published_at||null,
-      primary_tag:post.primary_tag?.name||null,
-      tags:(post.tags||[]).map(t=>t.name||t.slug||t).slice(0,10),
-      authors:(post.authors||[]).map(a=>a.name||a.slug||a).slice(0,5)
+  const records = chunks.map((txt, i) => {
+    let rec = {
+      ...base,
+      objectID: `${base.postId || 'post'}_${i}`,
+      chunkIndex: i,
+      plaintext: txt
     };
+    // ensure full JSON stays under soft limit
+    if (bLen(JSON.stringify(rec)) > JSON_SOFT_LIMIT) {
+      rec.plaintext = clampByBytes(rec.plaintext, MAX_CHUNK_BYTES - 1200); // aggressive trim for metadata room
+    }
+    return rec;
+  });
 
-    const records=chunks.map((txt,i)=>{
-      let rec={...base,objectID:`${post.id}_${i}`,chunkIndex:i,plaintext:txt};
-      if(bLen(JSON.stringify(rec))>JSON_SOFT_LIMIT)
-        rec.plaintext=clampByBytes(rec.plaintext,MAX_CHUNK_BYTES-1000);
-      return rec;
+  console.log('Record[0] size:', bLen(JSON.stringify(records[0] || {})));
+  if (records[1]) console.log('Record[1] size:', bLen(JSON.stringify(records[1])));
+
+  try {
+    const index = new IndexFactory({
+      appId: process.env.ALGOLIA_APP_ID,
+      apiKey: process.env.ALGOLIA_ADMIN_API_KEY,
+      index: process.env.ALGOLIA_INDEX_NAME
     });
 
-    const index=new IndexFactory(algoliaSettings);
+    // Keep settings in code so they don’t drift
     await index.setSettingsForIndex({
-      searchableAttributes:['title','plaintext'],
-      customRanking:['desc(published_at)'],
-      distinct:true,
-      attributeForDistinct:'postId'
+      searchableAttributes: ['title', 'plaintext'],
+      customRanking: ['desc(published_at)'],
+      distinct: true,
+      attributeForDistinct: 'postId'
     });
-    await index.save(records);
 
-    console.log(`✅ Indexed ${records.length} records for "${post.title}".`);
-    return{statusCode:200,body:`Indexed ${records.length} chunks for ${post.title}`};
-  }catch(e){
-    console.error('ALGOLIA_ERROR',e);
-    return{statusCode:500,body:JSON.stringify({error:e.message})};
+    await index.save(records);
+    console.log(`✅ Saved ${records.length} records for "${post.title}"`);
+    return { statusCode: 200, body: `Indexed ${records.length} chunk(s)` };
+  } catch (e) {
+    console.error('ALGOLIA_ERROR:', e && e.message);
+    return { statusCode: 500, body: JSON.stringify({ error: e && e.message }) };
   }
 };
