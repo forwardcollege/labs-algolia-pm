@@ -130,20 +130,20 @@ exports.handler = async (event) => {
     console.log('Using post.title only');
   }
 
-  if (!text.trim().length) {
+if (!text.trim().length) {
     console.log('No content to index after normalization.');
     return { statusCode: 200, body: 'No content to index' };
   }
 
-  // Cap huge content to keep processing bounded
-  const SAFE_CAP = 800000; // ~800KB upper bound before chunking
-  if (bLen(text) > SAFE_CAP) {
-    text = clampByBytes(text, SAFE_CAP);
-    console.log('Clamped extremely long text to', bLen(text), 'bytes');
+  // ---- safer linear chunker ----
+  const bytes = Buffer.from(text, 'utf8');
+  const total = bytes.length;
+  const chunks = [];
+  for (let offset = 0; offset < total; offset += MAX_CHUNK_BYTES) {
+    const slice = bytes.subarray(offset, Math.min(offset + MAX_CHUNK_BYTES, total));
+    chunks.push(slice.toString('utf8'));
   }
-
-  const chunks = chunkByBytes(text, MAX_CHUNK_BYTES);
-  console.log('Chunks generated:', chunks.length, 'first chunk bytes:', bLen(chunks[0] || ''));
+  console.log(`Chunks generated: ${chunks.length} (total ${total} bytes)`);
 
   if (!chunks.length) {
     return { statusCode: 200, body: 'No chunks to index' };
