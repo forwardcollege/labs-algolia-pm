@@ -1,3 +1,7 @@
+exports.handler = async () => {
+  return { statusCode: 200, body: "Test function OK" };
+};
+
 // --- top of file ---
 const IndexFactory = require('@tryghost/algolia-indexer');
 console.log("🚀 reindex-all function loaded!");
