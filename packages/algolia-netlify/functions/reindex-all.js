@@ -1,7 +1,7 @@
-// ✅ use built-in fetch (no require)
+// --- top of file ---
 const IndexFactory = require('@tryghost/algolia-indexer');
+console.log("🚀 reindex-all function loaded!");
 
-// helpers from your post-published.js (same as before) …
 
 // ---- copy these from your post-published.js for consistency ----
 const MAX_CHUNK_BYTES = 5500;
