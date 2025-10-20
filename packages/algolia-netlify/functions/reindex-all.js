@@ -1,7 +1,7 @@
 const algoliasearch = require('algoliasearch');
 const IndexFactory = require('@tryghost/algolia-indexer');
 
-// ---- helpers (mirrors post-published.js) -----------------------
+// ---- helpers ----------------------------------------------------
 const MAX_CHUNK_BYTES = 5500;
 const JSON_SOFT_LIMIT = 9500;
 const bLen = (s) => Buffer.byteLength(String(s || ''), 'utf8');
@@ -50,7 +50,6 @@ function flattenTags(tags) {
 // ----------------------------------------------------------------
 
 exports.handler = async (event) => {
-  // optional guard
   const { key } = event.queryStringParameters || {};
   if (key && key !== process.env.NETLIFY_KEY) {
     return { statusCode: 401, body: 'Unauthorized' };
@@ -67,7 +66,7 @@ exports.handler = async (event) => {
     return { statusCode: 500, body: 'Missing Ghost config.' };
   }
 
-  // 1) Fetch ALL posts with pagination; request both formats
+  // 1️⃣ Fetch all posts with pagination
   let allPosts = [];
   let page = 1;
   while (true) {
@@ -91,17 +90,15 @@ exports.handler = async (event) => {
 
   console.log(`Fetched total ${allPosts.length} posts from Ghost.`);
 
-  // 2) Prepare chunked records — ALWAYS prefer full HTML content
+  // 2️⃣ Prepare records
   const records = [];
   for (const post of allPosts) {
     let text = '';
 
     if (post.html && String(post.html).trim().length > 0) {
-      text = stripHtml(post.html); // full body extracted from HTML
-      // console.log(`Using HTML for: ${post.title}`);
+      text = stripHtml(post.html);
     } else if (post.plaintext && String(post.plaintext).trim().length > 0) {
-      text = String(post.plaintext); // fallback if html missing
-      // console.log(`Fallback to plaintext for: ${post.title}`);
+      text = String(post.plaintext);
     } else if (post.custom_excerpt) {
       text = String(post.custom_excerpt);
     } else if (post.title) {
@@ -110,7 +107,10 @@ exports.handler = async (event) => {
 
     if (!text || !text.trim()) continue;
 
+    // --- diagnostic logs ---
+    const totalBytes = bLen(text);
     const chunks = chunkByBytes(text, MAX_CHUNK_BYTES);
+    console.log(`Post: "${post.title}" | bytes: ${totalBytes} | chunks: ${chunks.length}`);
 
     const base = {
       postId: post.id,
@@ -125,7 +125,6 @@ exports.handler = async (event) => {
 
     chunks.forEach((txt, i) => {
       let rec = { ...base, objectID: `${post.id}_${i}`, chunkIndex: i, plaintext: txt };
-      // keep whole JSON under ~9.5KB
       if (bLen(JSON.stringify(rec)) > JSON_SOFT_LIMIT) {
         rec.plaintext = clampByBytes(rec.plaintext, MAX_CHUNK_BYTES - 1200);
       }
@@ -135,7 +134,7 @@ exports.handler = async (event) => {
 
   console.log(`Prepared ${records.length} records. Uploading to Algolia…`);
 
-  // 3) Clear and rebuild index
+  // 3️⃣ Clear and rebuild index
   const client = algoliasearch(process.env.ALGOLIA_APP_ID, process.env.ALGOLIA_ADMIN_API_KEY);
   const algoliaIndex = client.initIndex(process.env.ALGOLIA_INDEX_NAME);
   await algoliaIndex.clearObjects();
@@ -158,9 +157,9 @@ exports.handler = async (event) => {
     customRanking: ['desc(published_at)']
   });
 
+  console.log(`Saving ${records.length} fragments to Algolia index...`);
   await indexer.save(records);
   console.log(`✅ Reindex complete. ${records.length} total records saved.`);
 
   return { statusCode: 200, body: `Reindexed ${records.length} records.` };
 };
-
