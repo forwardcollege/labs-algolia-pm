@@ -1,16 +1,11 @@
-exports.handler = async () => {
-  return { statusCode: 200, body: "Test function OK" };
-};
-
-// --- top of file ---
+const algoliasearch = require('algoliasearch');
 const IndexFactory = require('@tryghost/algolia-indexer');
-console.log("🚀 reindex-all function loaded!");
 
-
-// ---- copy these from your post-published.js for consistency ----
+// ---- helpers (same as your post-published.js) --------------------
 const MAX_CHUNK_BYTES = 5500;
 const JSON_SOFT_LIMIT = 9500;
 const bLen = (s) => Buffer.byteLength(String(s || ''), 'utf8');
+
 function clampByBytes(str, limit) {
   if (!str) return str;
   str = String(str);
@@ -23,6 +18,7 @@ function clampByBytes(str, limit) {
   }
   return ans;
 }
+
 function chunkByBytes(str, limit = MAX_CHUNK_BYTES) {
   const out = [];
   const bytes = Buffer.from(String(str || ''), 'utf8');
@@ -32,6 +28,7 @@ function chunkByBytes(str, limit = MAX_CHUNK_BYTES) {
   }
   return out;
 }
+
 function stripHtml(html = '') {
   return String(html)
     .replace(/<script[\s\S]*?>[\s\S]*?<\/script>/gi, '')
@@ -40,38 +37,63 @@ function stripHtml(html = '') {
     .replace(/\s+/g, ' ')
     .trim();
 }
+
 function flattenAuthors(authors) {
   if (!Array.isArray(authors)) return [];
   return authors.map(a => (a && (a.name || a.slug || a.id)) || '').filter(Boolean).slice(0, 5);
 }
+
 function flattenTags(tags) {
   if (!Array.isArray(tags)) return [];
   return tags.map(t => (t && (t.name || t.slug || t.id)) || '').filter(Boolean).slice(0, 10);
 }
-// ----------------------------------------------------------------
+// -----------------------------------------------------------------
 
-exports.handler = async () => {
+exports.handler = async (event) => {
+  // optional protection key
+  const { key } = event.queryStringParameters || {};
+  if (key && key !== process.env.NETLIFY_KEY) {
+    return { statusCode: 401, body: 'Unauthorized' };
+  }
+
+  console.log('🚀 reindex-all function loaded!');
   console.log('🚀 Starting full reindex…');
 
   const GHOST_URL = process.env.GHOST_URL;
   const GHOST_CONTENT_KEY = process.env.GHOST_CONTENT_KEY;
+
   if (!GHOST_URL || !GHOST_CONTENT_KEY) {
     console.error('❌ Missing GHOST_URL or GHOST_CONTENT_KEY env vars.');
     return { statusCode: 500, body: 'Missing Ghost config.' };
   }
 
-  const api = `${GHOST_URL}/ghost/api/content/posts/?key=${GHOST_CONTENT_KEY}&limit=all&include=authors,tags`;
-  const res = await fetch(api);
-  if (!res.ok) {
-    console.error('Ghost API error:', res.status, res.statusText);
-    return { statusCode: 500, body: `Ghost API error ${res.status}` };
+  // 1️⃣ Fetch all posts with pagination
+  let allPosts = [];
+  let page = 1;
+  while (true) {
+    const api = `${GHOST_URL}/ghost/api/content/posts/` +
+                `?key=${GHOST_CONTENT_KEY}` +
+                `&limit=100&page=${page}` +
+                `&include=authors,tags&formats=plaintext,html`;
+    console.log('Fetching page', page);
+    const res = await fetch(api);
+    if (!res.ok) {
+      console.error('Ghost API error', res.status, res.statusText);
+      return { statusCode: 500, body: `Ghost API error ${res.status}` };
+    }
+    const data = await res.json();
+    if (!data.posts || data.posts.length === 0) break;
+    allPosts = allPosts.concat(data.posts);
+    console.log(`Fetched page ${page} (${data.posts.length} posts)`);
+    if (!data.meta?.pagination?.next) break;
+    page++;
   }
 
-  const { posts } = await res.json();
-  console.log(`Fetched ${posts.length} posts from Ghost.`);
+  console.log(`Fetched total ${allPosts.length} posts from Ghost.`);
 
+  // 2️⃣ Prepare records
   const records = [];
-  for (const post of posts) {
+  for (const post of allPosts) {
     const text =
       (post.plaintext && String(post.plaintext).trim()) ||
       (post.html && stripHtml(post.html)) ||
@@ -103,16 +125,19 @@ exports.handler = async () => {
 
   console.log(`Prepared ${records.length} records. Uploading to Algolia…`);
 
-  const index = new IndexFactory({
+  // 3️⃣ Clear and rebuild index
+  const client = algoliasearch(process.env.ALGOLIA_APP_ID, process.env.ALGOLIA_ADMIN_API_KEY);
+  const algoliaIndex = client.initIndex(process.env.ALGOLIA_INDEX_NAME);
+  await algoliaIndex.clearObjects();
+  console.log('Cleared existing index data.');
+
+  const indexer = new IndexFactory({
     appId: process.env.ALGOLIA_APP_ID,
     apiKey: process.env.ALGOLIA_ADMIN_API_KEY,
     index: process.env.ALGOLIA_INDEX_NAME
   });
 
-  // clear old data first
-  await index.clearIndex();
-
-  await index.setSettingsForIndex({
+  await indexer.setSettingsForIndex({
     searchableAttributes: ['title', 'unordered(plaintext)'],
     attributesToSnippet: ['plaintext:30'],
     snippetEllipsisText: '…',
@@ -123,8 +148,8 @@ exports.handler = async () => {
     customRanking: ['desc(published_at)']
   });
 
-  await index.save(records);
+  await indexer.save(records);
   console.log(`✅ Reindex complete. ${records.length} total records saved.`);
 
-  return { statusCode: 200, body: `Reindexed ${records.length} records` };
+  return { statusCode: 200, body: `Reindexed ${records.length} records.` };
 };
