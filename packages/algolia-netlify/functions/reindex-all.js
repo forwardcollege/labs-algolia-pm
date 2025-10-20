@@ -1,5 +1,6 @@
 const algoliasearch = require('algoliasearch');
 const IndexFactory = require('@tryghost/algolia-indexer');
+const jwt = require('jsonwebtoken');
 
 // ---- helpers ----------------------------------------------------
 const MAX_CHUNK_BYTES = 5500;
@@ -59,23 +60,29 @@ exports.handler = async (event) => {
   console.log('🚀 Starting full reindex…');
 
   const GHOST_URL = process.env.GHOST_URL;
-  const GHOST_CONTENT_KEY = process.env.GHOST_CONTENT_KEY;
+  const GHOST_ADMIN_API_KEY = process.env.GHOST_ADMIN_API_KEY;
 
-  if (!GHOST_URL || !GHOST_CONTENT_KEY) {
-    console.error('❌ Missing GHOST_URL or GHOST_CONTENT_KEY env vars.');
+  if (!GHOST_URL || !GHOST_ADMIN_API_KEY) {
+    console.error('❌ Missing GHOST_URL or GHOST_ADMIN_API_KEY env vars.');
     return { statusCode: 500, body: 'Missing Ghost config.' };
   }
 
-  // 1️⃣ Fetch all posts with pagination
+  // --- Generate JWT for Ghost Admin API ---
+  const [id, secret] = GHOST_ADMIN_API_KEY.split(':');
+  const token = jwt.sign({}, Buffer.from(secret, 'hex'), {
+    keyid: id,
+    algorithm: 'HS256',
+    expiresIn: '5m',
+    audience: '/admin/'
+  });
+
+  // 1️⃣ Fetch all posts with pagination (Admin API gives full content)
   let allPosts = [];
   let page = 1;
   while (true) {
-    const api = `${GHOST_URL}/ghost/api/content/posts/` +
-                `?key=${GHOST_CONTENT_KEY}` +
-                `&limit=100&page=${page}` +
-                `&include=authors,tags&formats=plaintext,html`;
+    const api = `${GHOST_URL}/ghost/api/admin/posts/?limit=100&page=${page}&include=authors,tags`;
     console.log('Fetching page', page);
-    const res = await fetch(api);
+    const res = await fetch(api, { headers: { Authorization: `Ghost ${token}` } });
     if (!res.ok) {
       console.error('Ghost API error', res.status, res.statusText);
       return { statusCode: 500, body: `Ghost API error ${res.status}` };
@@ -90,13 +97,13 @@ exports.handler = async (event) => {
 
   console.log(`Fetched total ${allPosts.length} posts from Ghost.`);
 
-  // 2️⃣ Prepare records
+  // 2️⃣ Prepare chunked records (always use full HTML)
   const records = [];
   for (const post of allPosts) {
     let text = '';
 
     if (post.html && String(post.html).trim().length > 0) {
-      text = stripHtml(post.html);
+      text = stripHtml(post.html); // full body from HTML
     } else if (post.plaintext && String(post.plaintext).trim().length > 0) {
       text = String(post.plaintext);
     } else if (post.custom_excerpt) {
@@ -107,7 +114,6 @@ exports.handler = async (event) => {
 
     if (!text || !text.trim()) continue;
 
-    // --- diagnostic logs ---
     const totalBytes = bLen(text);
     const chunks = chunkByBytes(text, MAX_CHUNK_BYTES);
     console.log(`Post: "${post.title}" | bytes: ${totalBytes} | chunks: ${chunks.length}`);
