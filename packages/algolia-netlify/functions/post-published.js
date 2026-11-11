@@ -180,19 +180,26 @@ if (!text.trim().length) {
   if (records[1]) console.log('Record[1] size:', bLen(JSON.stringify(records[1])));
 
   try {
+    const indexSettings = {
+      searchableAttributes: ['title', 'unordered(plaintext)'],
+      attributesToSnippet: ['plaintext:30'],
+      snippetEllipsisText: '…',
+      attributesToHighlight: ['title', 'plaintext'],
+      restrictHighlightAndSnippetArrays: true,
+      distinct: true,
+      attributeForDistinct: 'postId',
+      customRanking: ['desc(published_at)']
+    };
+
     const index = new IndexFactory({
       appId: process.env.ALGOLIA_APP_ID,
       apiKey: process.env.ALGOLIA_ADMIN_API_KEY,
-      index: process.env.ALGOLIA_INDEX_NAME
+      index: process.env.ALGOLIA_INDEX_NAME,
+      indexSettings
     });
 
     // Keep settings in code so they don’t drift
-    await index.setSettingsForIndex({
-      searchableAttributes: ['title', 'plaintext'],
-      customRanking: ['desc(published_at)'],
-      distinct: true,
-      attributeForDistinct: 'postId'
-    });
+    await index.setSettingsForIndex();
 
     await index.save(records);
     console.log(`✅ Saved ${records.length} records for "${post.title}"`);

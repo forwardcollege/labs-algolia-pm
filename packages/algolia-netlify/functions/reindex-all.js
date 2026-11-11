@@ -146,13 +146,7 @@ exports.handler = async (event) => {
   await algoliaIndex.clearObjects();
   console.log('Cleared existing index data.');
 
-  const indexer = new IndexFactory({
-    appId: process.env.ALGOLIA_APP_ID,
-    apiKey: process.env.ALGOLIA_ADMIN_API_KEY,
-    index: process.env.ALGOLIA_INDEX_NAME
-  });
-
-  await indexer.setSettingsForIndex({
+  const indexSettings = {
     searchableAttributes: ['title', 'unordered(plaintext)'],
     attributesToSnippet: ['plaintext:30'],
     snippetEllipsisText: '…',
@@ -161,7 +155,16 @@ exports.handler = async (event) => {
     distinct: true,
     attributeForDistinct: 'postId',
     customRanking: ['desc(published_at)']
+  };
+
+  const indexer = new IndexFactory({
+    appId: process.env.ALGOLIA_APP_ID,
+    apiKey: process.env.ALGOLIA_ADMIN_API_KEY,
+    index: process.env.ALGOLIA_INDEX_NAME,
+    indexSettings
   });
+
+  await indexer.setSettingsForIndex();
 
   console.log(`Saving ${records.length} fragments to Algolia index...`);
   await indexer.save(records);
